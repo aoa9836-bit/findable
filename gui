@@ -1,0 +1,379 @@
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player    = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local lockOnActive     = false
+local lockOnTarget     = nil
+local lockOnConnection = nil
+local LOCK_ON_INTERVAL = 0.1
+
+local walkActive  = false
+local walkStopped = false
+local WALK_DELAY  = 0.5
+
+local walkLoopEnabled   = false
+local walkDurationMode  = "loops"
+local walkMaxLoops      = 3
+local walkMaxTime       = 30
+
+local orderTeleActive    = false
+local orderTeleRunning   = false
+local orderTeleStopped   = false
+local orderWaypoints     = {}
+local orderNextIndex     = 0
+
+local orderLoopEnabled   = false
+local orderDurationMode  = "loops"
+local orderMaxLoops      = 3
+local orderMaxTime       = 30
+local ORDER_COLOR        = Color3.fromRGB(0, 162, 255)
+local ORDER_PLACED_COLOR = Color3.fromRGB(255, 161, 0)
+local ORDER_HOVER_COLOR  = Color3.fromRGB(255, 68, 68)
+
+local currentResults = {}
+local settingsOpen   = false
+
+local WALK_MIN, WALK_MAX = 0.05, 3.0
+local LOCK_MIN, LOCK_MAX = 0.02, 1.0
+
+local function sliderToWalk(t) return WALK_MIN + (WALK_MAX - WALK_MIN) * t end
+local function walkToSlider(v) return (v - WALK_MIN) / (WALK_MAX - WALK_MIN) end
+local function sliderToLock(t) return LOCK_MIN + (LOCK_MAX - LOCK_MIN) * t end
+local function lockToSlider(v) return (v - LOCK_MIN) / (LOCK_MAX - LOCK_MIN) end
+
+local function fmtTime(s)
+	return s < 1 and string.format("%.2fs", s) or string.format("%.1fs", s)
+end
+
+local function setCharacterFrozen(frozen)
+	local char = player.Character
+	if not char then return end
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if hrp and hrp:IsA("BasePart") then
+		hrp.Anchored = frozen
+	end
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "ObjectFinderGui"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = playerGui
+
+local toggleBtn = Instance.new("TextButton", screenGui)
+toggleBtn.Size = UDim2.new(0, 48, 0, 48)
+toggleBtn.Position = UDim2.new(0, 16, 0, 16)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+toggleBtn.BorderSizePixel = 0
+toggleBtn.Text = "🔍"
+toggleBtn.TextSize = 20
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleBtn.ZIndex = 10
+Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 10)
+local tBtnStroke = Instance.new("UIStroke", toggleBtn)
+tBtnStroke.Color = Color3.fromRGB(55, 55, 75)
+tBtnStroke.Thickness = 1
+
+local panel = Instance.new("Frame", screenGui)
+panel.Name = "Panel"
+panel.Size = UDim2.new(0, 400, 0, 560)
+panel.Position = UDim2.new(0, 16, 0, 76)
+panel.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
+panel.BorderSizePixel = 0
+panel.Visible = false
+panel.ZIndex = 9
+Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 14)
+
+local panelStroke = Instance.new("UIStroke", panel)
+panelStroke.Color = Color3.fromRGB(45, 45, 65)
+panelStroke.Thickness = 1.5
+
+local titleBar = Instance.new("Frame", panel)
+titleBar.Size = UDim2.new(1, 0, 0, 46)
+titleBar.BackgroundColor3 = Color3.fromRGB(22, 22, 34)
+titleBar.BorderSizePixel = 0
+titleBar.ZIndex = 10
+Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 14)
+
+local tpatch = Instance.new("Frame", titleBar)
+tpatch.Size = UDim2.new(1, 0, 0, 16)
+tpatch.Position = UDim2.new(0, 0, 1, -16)
+tpatch.BackgroundColor3 = Color3.fromRGB(22, 22, 34)
+tpatch.BorderSizePixel = 0
+tpatch.ZIndex = 10
+
+local titleLabel = Instance.new("TextLabel", titleBar)
+titleLabel.Size = UDim2.new(1, -60, 1, 0)
+titleLabel.Position = UDim2.new(0, 16, 0, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "🔍  Object Finder"
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.TextSize = 16
+titleLabel.TextColor3 = Color3.fromRGB(220, 220, 255)
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.ZIndex = 11
+
+local settingsToggle = Instance.new("TextButton", titleBar)
+settingsToggle.Size = UDim2.new(0, 36, 0, 30)
+settingsToggle.Position = UDim2.new(1, -44, 0.5, -15)
+settingsToggle.BackgroundColor3 = Color3.fromRGB(36, 36, 54)
+settingsToggle.BorderSizePixel = 0
+settingsToggle.Text = "⚙"
+settingsToggle.TextSize = 16
+settingsToggle.Font = Enum.Font.GothamBold
+settingsToggle.TextColor3 = Color3.fromRGB(180, 180, 230)
+settingsToggle.ZIndex = 12
+Instance.new("UICorner", settingsToggle).CornerRadius = UDim.new(0, 8)
+
+local settingsPanel = Instance.new("Frame", panel)
+settingsPanel.Name = "SettingsPanel"
+settingsPanel.Size = UDim2.new(1, -24, 0, 104)
+settingsPanel.Position = UDim2.new(0, 12, 0, 54)
+settingsPanel.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+settingsPanel.BorderSizePixel = 0
+settingsPanel.Visible = false
+settingsPanel.ZIndex = 12
+Instance.new("UICorner", settingsPanel).CornerRadius = UDim.new(0, 10)
+
+local spStroke = Instance.new("UIStroke", settingsPanel)
+spStroke.Color = Color3.fromRGB(45, 45, 70)
+spStroke.Thickness = 1
+
+local function makeSlider(parent, yPos, labelText, accentColor, initT, onChanged)
+	local row = Instance.new("Frame", parent)
+	row.Size = UDim2.new(1, -20, 0, 42)
+	row.Position = UDim2.new(0, 10, 0, yPos)
+	row.BackgroundTransparency = 1
+	row.ZIndex = 13
+
+	local lbl = Instance.new("TextLabel", row)
+	lbl.Size = UDim2.new(0, 160, 0, 20)
+	lbl.BackgroundTransparency = 1
+	lbl.Text = labelText
+	lbl.Font = Enum.Font.GothamBold
+	lbl.TextSize = 12
+	lbl.TextColor3 = Color3.fromRGB(170, 170, 200)
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.ZIndex = 14
+
+	local valLbl = Instance.new("TextLabel", row)
+	valLbl.Size = UDim2.new(1, -164, 0, 20)
+	valLbl.Position = UDim2.new(0, 164, 0, 0)
+	valLbl.BackgroundTransparency = 1
+	valLbl.Font = Enum.Font.GothamBold
+	valLbl.TextSize = 12
+	valLbl.TextColor3 = accentColor
+	valLbl.TextXAlignment = Enum.TextXAlignment.Right
+	valLbl.ZIndex = 14
+
+	local track = Instance.new("Frame", row)
+	track.Size = UDim2.new(1, 0, 0, 6)
+	track.Position = UDim2.new(0, 0, 1, -8)
+	track.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+	track.BorderSizePixel = 0
+	track.ZIndex = 14
+	Instance.new("UICorner", track).CornerRadius = UDim.new(0, 3)
+
+	local fill = Instance.new("Frame", track)
+	fill.Size = UDim2.new(initT, 0, 1, 0)
+	fill.BackgroundColor3 = accentColor
+	fill.BorderSizePixel = 0
+	fill.ZIndex = 15
+	Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 3)
+
+	local thumb = Instance.new("Frame", track)
+	thumb.Size = UDim2.new(0, 12, 0, 12)
+	thumb.Position = UDim2.new(initT, -6, 0.5, -6)
+	thumb.BackgroundColor3 = Color3.fromRGB(240, 240, 255)
+	thumb.BorderSizePixel = 0
+	thumb.ZIndex = 16
+	Instance.new("UICorner", thumb).CornerRadius = UDim.new(0, 6)
+
+	local draggingSlider = false
+
+	local function setT(t)
+		t = math.clamp(t, 0, 1)
+		fill.Size = UDim2.new(t, 0, 1, 0)
+		thumb.Position = UDim2.new(t, -6, 0.5, -6)
+		onChanged(t, valLbl)
+	end
+
+	setT(initT)
+
+	track.InputBegan:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+			draggingSlider = true
+			setT((inp.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X)
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(inp)
+		if draggingSlider and (inp.UserInputType == Enum.UserInputType.MouseMovement or inp.UserInputType == Enum.UserInputType.Touch) then
+			setT((inp.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+			draggingSlider = false
+		end
+	end)
+
+	return setT
+end
+
+local searchBox = Instance.new("TextBox", panel)
+local row1 = Instance.new("Frame", panel)
+local row2 = Instance.new("Frame", panel)
+local row3 = Instance.new("Frame", panel)
+local statusLabel = Instance.new("TextLabel", panel)
+local lockBar = Instance.new("Frame", panel)
+local orderPanel = Instance.new("Frame", panel)
+local resultsFrame = Instance.new("ScrollingFrame", panel)
+
+local function refreshLayout()
+	local shift = settingsOpen and 112 or 0
+	local baseTop = 246 + shift
+	local orderPanelH = orderTeleActive and 110 or 0
+	
+	searchBox.Position = UDim2.new(0, 12, 0, 56 + shift)
+	row1.Position      = UDim2.new(0, 12, 0, 102 + shift)
+	row2.Position      = UDim2.new(0, 12, 0, 144 + shift)
+	row3.Position      = UDim2.new(0, 12, 0, 186 + shift)
+
+	if orderTeleActive then
+		orderPanel.Visible = true
+		orderPanel.Size = UDim2.new(1, -24, 0, orderPanelH)
+		orderPanel.Position = UDim2.new(0, 12, 0, 226 + shift)
+		statusLabel.Position = UDim2.new(0, 14, 0, 226 + shift + orderPanelH + 6)
+		lockBar.Position     = UDim2.new(0, 12, 0, 226 + shift + orderPanelH + 28)
+		baseTop = 226 + shift + orderPanelH + 28
+	else
+		orderPanel.Visible = false
+		statusLabel.Position = UDim2.new(0, 14, 0, 226 + shift)
+		lockBar.Position     = UDim2.new(0, 12, 0, 246 + shift)
+		baseTop = 246 + shift
+	end
+	
+	local top = lockBar.Visible and (baseTop + 38) or baseTop
+	resultsFrame.Position = UDim2.new(0, 12, 0, top)
+	resultsFrame.Size     = UDim2.new(1, -24, 1, -(top + 10))
+end
+
+makeSlider(settingsPanel, 8, "⏩  Walk-Through delay", Color3.fromRGB(0, 162, 255), walkToSlider(WALK_DELAY), function(t, valLbl)
+	WALK_DELAY = sliderToWalk(t)
+	valLbl.Text = fmtTime(WALK_DELAY)
+end)
+
+makeSlider(settingsPanel, 54, "🔒  Lock-On interval", Color3.fromRGB(0, 220, 120), lockToSlider(LOCK_ON_INTERVAL), function(t, valLbl)
+	LOCK_ON_INTERVAL = sliderToLock(t)
+	valLbl.Text = fmtTime(LOCK_ON_INTERVAL)
+end)
+
+settingsToggle.Activated:Connect(function()
+	settingsOpen = not settingsOpen
+	settingsPanel.Visible = settingsOpen
+	settingsToggle.BackgroundColor3 = settingsOpen and Color3.fromRGB(50, 50, 75) or Color3.fromRGB(36, 36, 54)
+	refreshLayout()
+end)
+
+toggleBtn.Activated:Connect(function()
+	panel.Visible = not panel.Visible
+end)
+
+local dragging, dragStart, startPos = false, nil, nil
+titleBar.InputBegan:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = i.Position
+		startPos = panel.Position
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(i)
+	if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+		local d = i.Position - dragStart
+		panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then 
+		dragging = false 
+	end
+end)
+
+searchBox.Size = UDim2.new(1, -24, 0, 38)
+searchBox.BackgroundColor3 = Color3.fromRGB(24, 24, 36)
+searchBox.BorderSizePixel = 0
+searchBox.PlaceholderText = "Type object name to search..."
+searchBox.PlaceholderColor3 = Color3.fromRGB(90, 90, 115)
+searchBox.Text = ""; searchBox.Font = Enum.Font.Gotham; searchBox.TextSize = 14
+searchBox.TextColor3 = Color3.fromRGB(240, 240, 255); searchBox.ClearTextOnFocus = false; searchBox.ZIndex = 10
+Instance.new("UICorner", searchBox).CornerRadius = UDim.new(0, 8)
+local sboxStroke = Instance.new("UIStroke", searchBox)
+sboxStroke.Color = Color3.fromRGB(55, 55, 80); sboxStroke.Thickness = 1
+
+row1.Size = UDim2.new(1, -24, 0, 34); row1.BackgroundTransparency = 1; row1.ZIndex = 10
+
+local searchBtn = Instance.new("TextButton", row1)
+searchBtn.Size = UDim2.new(0.65, -4, 1, 0); searchBtn.BackgroundColor3 = Color3.fromRGB(50, 70, 180)
+searchBtn.BorderSizePixel = 0; searchBtn.Text = "Search Workspace"; searchBtn.Font = Enum.Font.GothamBold
+searchBtn.TextSize = 13; searchBtn.TextColor3 = Color3.fromRGB(255, 255, 255); searchBtn.ZIndex = 10
+Instance.new("UICorner", searchBtn).CornerRadius = UDim.new(0, 8)
+
+local clearBtn = Instance.new("TextButton", row1)
+clearBtn.Size = UDim2.new(0.35, -4, 1, 0); clearBtn.Position = UDim2.new(0.65, 4, 0, 0)
+clearBtn.BackgroundColor3 = Color3.fromRGB(48, 24, 28)
+clearBtn.BorderSizePixel = 0; clearBtn.Text = "Clear"; clearBtn.Font = Enum.Font.GothamBold
+clearBtn.TextSize = 13; clearBtn.TextColor3 = Color3.fromRGB(255, 150, 150); clearBtn.ZIndex = 10
+Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 8)
+local clearStroke = Instance.new("UIStroke", clearBtn)
+clearStroke.Color = Color3.fromRGB(90, 40, 45); clearStroke.Thickness = 1
+
+row2.Size = UDim2.new(1, -24, 0, 34); row2.BackgroundTransparency = 1; row2.ZIndex = 10; row2.Visible = true
+
+local walkBtn = Instance.new("TextButton", row2)
+walkBtn.Size = UDim2.new(1, 0, 1, 0); walkBtn.BackgroundColor3 = Color3.fromRGB(22, 64, 42)
+walkBtn.BorderSizePixel = 0; walkBtn.Text = "▶  Start Fast Walk-Through"
+walkBtn.Font = Enum.Font.GothamBold; walkBtn.TextSize = 13
+walkBtn.TextColor3 = Color3.fromRGB(160, 240, 190); walkBtn.ZIndex = 10
+Instance.new("UICorner", walkBtn).CornerRadius = UDim.new(0, 8)
+local wStroke = Instance.new("UIStroke", walkBtn)
+wStroke.Color = Color3.fromRGB(40, 120, 80); wStroke.Thickness = 1
+
+local walkStopBtn = Instance.new("TextButton", row2)
+walkStopBtn.Size = UDim2.new(0.3, -4, 1, 0); walkStopBtn.Position = UDim2.new(0.7, 4, 0, 0)
+walkStopBtn.BackgroundColor3 = Color3.fromRGB(90, 25, 30); walkStopBtn.BorderSizePixel = 0
+walkStopBtn.Text = "⏹ Stop"; walkStopBtn.Font = Enum.Font.GothamBold; walkStopBtn.TextSize = 13
+walkStopBtn.TextColor3 = Color3.fromRGB(255, 180, 180); walkStopBtn.ZIndex = 11; walkStopBtn.Visible = false
+Instance.new("UICorner", walkStopBtn).CornerRadius = UDim.new(0, 8)
+
+local function searchWorkspace(query)
+	local results = {}
+	query = query:lower()
+	
+	local descendants = workspace:GetDescendants()
+	for i = 1, #descendants do
+		local child = descendants[i]
+		if (child:IsA("BasePart") or child:IsA("Model")) and child.Name:lower():find(query, 1, true) then
+			table.insert(results, {
+				object = child, 
+				path = "Workspace/" .. child:GetFullName(), 
+				className = child.ClassName
+			})
+		end
+	end
+	return results
+end
+
+local function getPosition(obj)
+	if obj:IsA("BasePart") then 
+		return obj.Position + Vector3.new(0, 3, 0) 
+	elseif obj:IsA("Model") then
+		local ok, cf, sz = pcall(function() return obj:GetBoundingBox() end)
+		if ok then
